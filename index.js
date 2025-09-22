@@ -1,3 +1,5 @@
+require("dotenv").config();
+
 const { Client, GatewayIntentBits } = require("discord.js");
 const Redis = require("ioredis");
 
@@ -48,6 +50,12 @@ client.on("messageCreate", async (message) => {
     const data = await redis.get(key);
     if (!data) return message.reply(`❌ ${month} 月沒有紀錄`);
     message.reply(formatResult(JSON.parse(data), `${year}-${month - 1}`));
+  }
+
+  // 查詢當前月排行
+  if (message.content === "!本月排行") {
+    // 格式化 current 資料
+    message.reply(formatResult(current, "本月"));
   }
 });
 
