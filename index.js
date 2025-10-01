@@ -59,9 +59,9 @@ client.on("messageCreate", async (message) => {
   // 查詢歷史排行
   const match = message.content.match(/^!(\d+)月排行$/);
   if (match) {
-    const month = parseInt(match[1]);
+    const month = String(match[1]).padStart(2, "0");
     const year = dayjs().tz("Asia/Taipei").year();
-    const key = `rank:${year}-${month - 1}:${channelId}`;
+    const key = `rank:${year}-${month}:${channelId}`;
     const stored = await redis.get(key);
     if (!stored) return message.reply(`❌ ${month} 月沒有紀錄`);
     message.reply(formatResult(JSON.parse(stored), `${year}-${month - 1}`));
