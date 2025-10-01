@@ -59,12 +59,13 @@ client.on("messageCreate", async (message) => {
   // 查詢歷史排行
   const match = message.content.match(/^!(\d+)月排行$/);
   if (match) {
-    const month = parseInt(match[1]);
-    const year = dayjs().year();
+    const queryMonth = parseInt(match[1]);
+    const month = queryMonth - 1; // 0~11
+    const year = dayjs().tz("Asia/Taipei").year();
     const key = `rank:${year}-${month}:${channelId}`;
     const stored = await redis.get(key);
-    if (!stored) return message.reply(`❌ ${month} 月沒有紀錄`);
-    message.reply(formatResult(JSON.parse(stored), `${year}-${month}`));
+    if (!stored) return message.reply(`❌ ${queryMonth} 月沒有紀錄`);
+    message.reply(formatResult(JSON.parse(stored), `${year}-${queryMonth}`));
   }
 
   // 查詢本月排行
@@ -104,37 +105,86 @@ client.on("messageReactionAdd", async (reaction) => {
 });
 
 // ------------------
-// 每月結算（台灣時區 UTC+8）
+// 每月結算
 // ------------------
 async function monthlyReport() {
   const now = dayjs().tz("Asia/Taipei");
   const year = now.year();
-  const month = now.month() + 1; // 1~12
+  const month = now.month(); // 0~11
 
   for (const channelId in current) {
     const data = current[channelId];
     const key = `rank:${year}-${month}:${channelId}`;
 
-    // 儲存 Redis (半年有效)
-    await redis.set(key, JSON.stringify(data), "EX", 60 * 60 * 24 * 30 * 6);
+    // 儲存 Redis (一年有效)
+    await redis.set(key, JSON.stringify(data), "EX", 60 * 60 * 24 * 365);
 
     // 發送訊息到頻道
-    try {
-      const channel = await client.channels.fetch(channelId);
-      channel.send(formatResult(data, `${year}-${month}`));
-    } catch (err) {
-      console.error(`無法發送訊息到頻道 ${channelId}`, err);
-    }
+    const channel = await client.channels.fetch(channelId);
+    channel.send(formatResult(data, `${year}-${month + 1}`));
   }
 
   current = {}; // 清空當月暫存
 }
 
-// 每分鐘檢查是否 1 號台灣時間 00:00~00:05
+// ------------------
+// 每年結算
+// ------------------
+async function yearlyReport() {
+  const now = dayjs().tz("Asia/Taipei");
+  const year = now.year() - 1; // 結算去年資料
+
+  for (const channelId of allowedChannels) {
+    let yearlyData = { mentions: {}, votes: {}, reactions: {} };
+
+    for (let m = 0; m < 12; m++) {
+      const key = `rank:${year}-${m}:${channelId}`;
+      const stored = await redis.get(key);
+      if (!stored) continue;
+      const data = JSON.parse(stored);
+
+      // 合併統計
+      Object.entries(data.mentions || {}).forEach(([id, c]) => {
+        yearlyData.mentions[id] = (yearlyData.mentions[id] || 0) + c;
+      });
+      Object.entries(data.votes || {}).forEach(([id, c]) => {
+        yearlyData.votes[id] = (yearlyData.votes[id] || 0) + c;
+      });
+      Object.values(data.reactions || {}).forEach((item) => {
+        yearlyData.reactions[`${item.userId}-${item.content}`] = yearlyData
+          .reactions[`${item.userId}-${item.content}`] || {
+          userId: item.userId,
+          content: item.content,
+          count: 0,
+        };
+        yearlyData.reactions[`${item.userId}-${item.content}`].count +=
+          item.count;
+      });
+    }
+
+    const channel = await client.channels.fetch(channelId);
+    channel.send(formatResult(yearlyData, `${year} 年度`));
+  }
+}
+
+// ------------------
+// 排程檢查時間（台灣時區）
+// ------------------
 setInterval(() => {
   const now = dayjs().tz("Asia/Taipei");
-  if (now.date() === 1 && now.hour() === 0 && now.minute() < 5) {
+  const day = now.date();
+  const month = now.month() + 1; // 1~12
+  const hour = now.hour();
+  const minute = now.minute();
+
+  // 每月 1 號 00:00 發布月排行
+  if (day === 1 && hour === 0 && minute < 5) {
     monthlyReport();
+  }
+
+  // 每年 1/1 00:00 發布年度排行
+  if (month === 1 && day === 1 && hour === 0 && minute < 5) {
+    yearlyReport();
   }
 }, 60 * 1000);
 
@@ -149,18 +199,18 @@ function formatResult(data, title) {
     .sort((a, b) => b[1] - a[1])
     .slice(0, 5);
   result += "\n🏆 被 @ 次數排行：\n";
-  mentionRank.forEach(
-    ([id, count], i) => (result += `${i + 1}. <@${id}> - ${count} 次\n`)
-  );
+  mentionRank.forEach(([id, count], i) => {
+    result += `${i + 1}. <@${id}> - ${count} 次\n`;
+  });
 
   // 投票排行
   const voteRank = Object.entries(data.votes || {})
     .sort((a, b) => b[1] - a[1])
     .slice(0, 3);
   result += "\n❤️ 投票排行：\n";
-  voteRank.forEach(
-    ([id, count], i) => (result += `${i + 1}. <@${id}> - ${count} 票\n`)
-  );
+  voteRank.forEach(([id, count], i) => {
+    result += `${i + 1}. <@${id}> - ${count} 票\n`;
+  });
 
   // 熱門訊息排行
   const hotRank = Object.values(data.reactions || {})
@@ -175,12 +225,6 @@ function formatResult(data, title) {
 
   return result;
 }
-
-// ------------------
-// 錯誤捕捉
-// ------------------
-client.on("error", (err) => console.error("Client error:", err));
-client.on("warn", (warn) => console.warn("Client warning:", warn));
 
 // ------------------
 // 啟動 Bot
