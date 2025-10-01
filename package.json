@@ -10,6 +10,7 @@
   "license": "ISC",
   "description": "",
   "dependencies": {
+    "dayjs": "^1.11.18",
     "discord.js": "^14.22.1",
     "dotenv": "^17.2.2",
     "ioredis": "^5.7.0",
